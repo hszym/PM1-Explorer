@@ -144,8 +144,9 @@ export default function PM1Explorer() {
       const pfRes = await fetch("/api/portfolios", {
         headers: { Authorization: `Bearer ${t}` },
       });
-      const pfs: Portfolio[] = await pfRes.json();
-      if (!pfRes.ok) throw new Error("Failed to fetch portfolios");
+      const pfData = await pfRes.json();
+      if (!pfRes.ok) throw new Error(pfData.error ?? "Failed to fetch portfolios");
+      const pfs: Portfolio[] = pfData;
 
       setToken(t);
       setDecoded(d);

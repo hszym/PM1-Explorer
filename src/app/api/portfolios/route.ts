@@ -15,6 +15,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(portfolios);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to fetch portfolios";
+    console.error("[/api/portfolios]", message);
     const status = message.includes("401") ? 401 : 500;
     return NextResponse.json({ error: message }, { status });
   }

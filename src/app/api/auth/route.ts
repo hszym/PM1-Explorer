@@ -30,6 +30,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ token, decoded });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Authentication failed";
+    console.error("[/api/auth]", message);
     return NextResponse.json({ error: message }, { status: 401 });
   }
 }
