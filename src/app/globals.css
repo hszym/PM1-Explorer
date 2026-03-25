@@ -1,0 +1,58 @@
+/* src/app/globals.css */
+
+:root {
+  --navy:   #1E2B3C;
+  --gold:   #C4874A;
+  --grey:   #f3f4f5;
+  --white:  #FFFFFF;
+  --slate:  #64748b;
+  --muted:  #94a3b8;
+  --border: #e2e8f0;
+  --light-border: #f1f5f9;
+  --bg:     #f8fafc;
+
+  --font-serif: var(--font-cormorant), 'Cormorant Garamond', Georgia, serif;
+  --font-sans:  var(--font-dm), 'DM Sans', system-ui, sans-serif;
+
+  --radius-sm: 6px;
+  --radius:    8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  height: 100%;
+  font-family: var(--font-sans);
+  background: var(--bg);
+  color: var(--navy);
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font-family: var(--font-sans);
+  cursor: pointer;
+}
+
+input, textarea {
+  font-family: var(--font-sans);
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+}
