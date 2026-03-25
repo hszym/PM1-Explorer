@@ -3,10 +3,10 @@
 
 import type { Portfolio } from "./types";
 
-const BASE = process.env.PM1_API_BASE!;
-
-if (!BASE) {
-  throw new Error("PM1_API_BASE env variable is not set");
+function getBase(): string {
+  const base = process.env.PM1_API_BASE;
+  if (!base) throw new Error("PM1_API_BASE env variable is not set");
+  return base;
 }
 
 /**
@@ -19,7 +19,7 @@ export async function pm1Authenticate(
 ): Promise<string> {
   const cred = Buffer.from(`${username}:${password}`).toString("base64");
 
-  const res = await fetch(`${BASE}/authenticate`, {
+  const res = await fetch(`${getBase()}/authenticate`, {
     method: "GET",
     headers: {
       Authorization: `Basic ${cred}`,
@@ -42,7 +42,7 @@ export async function pm1Authenticate(
  * Fetch all portfolios accessible to the authenticated user.
  */
 export async function pm1FetchPortfolios(token: string): Promise<Portfolio[]> {
-  const res = await fetch(`${BASE}/portfolios`, {
+  const res = await fetch(`${getBase()}/portfolios`, {
     headers: { Authorization: `Bearer ${token}` },
     cache: "no-store",
   });
@@ -59,7 +59,7 @@ export async function pm1Get<T>(
   path: string,
   params?: Record<string, string>
 ): Promise<T> {
-  const url = new URL(`${BASE}${path}`);
+  const url = new URL(`${getBase()}${path}`);
   if (params) {
     Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
   }
@@ -117,7 +117,7 @@ export async function pm1UploadDocument(
     mimeType: string;
   }
 ) {
-  const res = await fetch(`${BASE}/documents`, {
+  const res = await fetch(`${getBase()}/documents`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
