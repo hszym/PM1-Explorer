@@ -5,6 +5,10 @@ import type { Portfolio, DocumentType, Person, UploadRecord } from "@/lib/types"
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
+function pm1Base() {
+  return process.env.NEXT_PUBLIC_PM1_API_BASE ?? "";
+}
+
 function getSession(): { token: string; portfolios: Portfolio[]; userName: string } | null {
   if (typeof window === "undefined") return null;
   try {
@@ -81,7 +85,7 @@ function PersonSearchInput({
     setSearching(true);
     setSearched(false);
     try {
-      const res = await fetch(`/api/persons?email=${encodeURIComponent(email.trim())}`, {
+      const res = await fetch(`${pm1Base()}/persons?email=${encodeURIComponent(email.trim())}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await res.json();
@@ -226,7 +230,7 @@ export default function UploadPage() {
   // Load document types
   useEffect(() => {
     if (!token) return;
-    fetch("/api/masterdata?type=IDocumentType", {
+    fetch(`${pm1Base()}/masterdata/com.expersoft.pm.document.masterdata.IDocumentType`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then(r => r.json())
@@ -285,7 +289,7 @@ export default function UploadPage() {
 
     try {
       const fileContent = await fileToBase64(file);
-      const res = await fetch("/api/documents", {
+      const res = await fetch(`${pm1Base()}/documents`, {
         method: "POST",
         headers: authHeaders(token),
         body: JSON.stringify({

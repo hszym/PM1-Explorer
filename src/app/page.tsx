@@ -129,24 +129,35 @@ export default function PM1Explorer() {
     setLoading(true);
     setError("");
     try {
-      // 1. Authenticate
-      const authRes = await fetch("/api/auth", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password }),
+      const base = process.env.NEXT_PUBLIC_PM1_API_BASE;
+      if (!base) throw new Error("NEXT_PUBLIC_PM1_API_BASE is not configured");
+
+      // 1. Authenticate directly from the browser (same as old version)
+      const cred = btoa(`${username}:${password}`);
+      const authRes = await fetch(`${base}/authenticate`, {
+        method: "GET",
+        headers: {
+          Authorization: `Basic ${cred}`,
+          Accept: "application/json, text/plain, */*",
+        },
       });
-      const authData = await authRes.json();
-      if (!authRes.ok) throw new Error(authData.error ?? "Auth failed");
+      if (!authRes.ok) {
+        const body = await authRes.text().catch(() => "");
+        throw new Error(`Auth failed ${authRes.status}: ${body}`);
+      }
+      const raw = await authRes.text();
+      const t = raw.trim().replace(/^"|"$/g, "");
 
-      const { token: t, decoded: d } = authData;
+      const { decodeJWT } = await import("@/lib/jwt");
+      const d = decodeJWT(t);
+      if (!d) throw new Error("Received an invalid token from PM1");
 
-      // 2. Fetch portfolios
-      const pfRes = await fetch("/api/portfolios", {
+      // 2. Fetch portfolios directly from the browser
+      const pfRes = await fetch(`${base}/portfolios`, {
         headers: { Authorization: `Bearer ${t}` },
       });
-      const pfData = await pfRes.json();
-      if (!pfRes.ok) throw new Error(pfData.error ?? "Failed to fetch portfolios");
-      const pfs: Portfolio[] = pfData;
+      if (!pfRes.ok) throw new Error(`Portfolios failed ${pfRes.status}`);
+      const pfs: Portfolio[] = await pfRes.json();
 
       setToken(t);
       setDecoded(d);
