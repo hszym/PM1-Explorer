@@ -29,7 +29,10 @@ export async function POST(req: NextRequest) {
     // /api/* routes — it never touches PM1 from the browser.
     return NextResponse.json({ token, decoded });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Authentication failed";
+    const isTimeout = err instanceof Error && err.name === "TimeoutError";
+    const message = isTimeout
+      ? "Connection timed out — the PM1 server may be unreachable from Vercel (firewall/IP restriction)"
+      : err instanceof Error ? err.message : "Authentication failed";
     console.error("[/api/auth]", message);
     return NextResponse.json({ error: message }, { status: 401 });
   }

@@ -9,6 +9,10 @@ function getBase(): string {
   return base;
 }
 
+function signal(ms = 8000) {
+  return AbortSignal.timeout(ms);
+}
+
 /**
  * Authenticate with PM1 and return a raw JWT string.
  * Called from the /api/auth route — password never reaches the browser.
@@ -26,6 +30,7 @@ export async function pm1Authenticate(
       Accept: "application/json, text/plain, */*",
     },
     cache: "no-store",
+    signal: signal(),
   });
 
   if (!res.ok) {
@@ -45,6 +50,7 @@ export async function pm1FetchPortfolios(token: string): Promise<Portfolio[]> {
   const res = await fetch(`${getBase()}/portfolios`, {
     headers: { Authorization: `Bearer ${token}` },
     cache: "no-store",
+    signal: signal(),
   });
 
   if (!res.ok) {
@@ -67,6 +73,7 @@ export async function pm1Get<T>(
   const res = await fetch(url.toString(), {
     headers: { Authorization: `Bearer ${token}` },
     cache: "no-store",
+    signal: signal(),
   });
 
   if (!res.ok) {
@@ -125,6 +132,7 @@ export async function pm1UploadDocument(
     },
     body: JSON.stringify(payload),
     cache: "no-store",
+    signal: signal(15000),
   });
 
   if (!res.ok) {
