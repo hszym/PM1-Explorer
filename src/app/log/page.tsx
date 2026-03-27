@@ -229,13 +229,14 @@ export default function ContactLogPage() {
 
   // Email drop zone
   const [parsedEmail, setParsedEmail] = useState<ParsedEmail | null>(null);
+  const [emailFile, setEmailFile] = useState<File | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [parseError, setParseError] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Form fields derived/overridable
+  // Form fields
   const [subject, setSubject] = useState("");
-  const [body, setBody] = useState("");
+  const [note, setNote] = useState("");
   const [purpose, setPurpose] = useState("");
   const [date, setDate] = useState(todayISO());
 
@@ -297,8 +298,8 @@ export default function ContactLogPage() {
         parsed = parseEml(text);
       }
       setParsedEmail(parsed);
+      setEmailFile(file);
       setSubject(parsed.subject);
-      setBody(parsed.body);
       setDate(parsed.date);
       // auto-trigger person search with sender email
       if (parsed.fromEmail) {
@@ -321,8 +322,9 @@ export default function ContactLogPage() {
 
   const resetEmail = () => {
     setParsedEmail(null);
+    setEmailFile(null);
     setSubject("");
-    setBody("");
+    setNote("");
     setDate(todayISO());
     setQuery("");
     setSearchResults([]);
@@ -332,37 +334,40 @@ export default function ContactLogPage() {
 
   // ── upload ─────────────────────────────────────────────────────────────────
 
-  const canSubmit = subject.trim() && body.trim() && purpose;
+  const canSubmit = !!(emailFile && subject.trim() && purpose);
 
   const handleSubmit = async () => {
-    if (!canSubmit) return;
+    if (!canSubmit || !emailFile || !parsedEmail) return;
     setError("");
     setResult(null);
 
-    const bodyBytes = new TextEncoder().encode(body);
+    const autoDescription = `Email from ${parsedEmail.from || parsedEmail.fromEmail}: ${parsedEmail.subject}`;
+    const contactBody = note.trim() ? `${note.trim()}\n\n${autoDescription}` : autoDescription;
     const createdOn = date || todayISO();
-    const participants = [{ email: "" }];
+    const participants = [{ email: parsedEmail.fromEmail || "" }];
 
     try {
+      // Step 1: create contact log
       setUploadStep(1);
       const r1 = await fetch("/api/contact-log", {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ step: 1, subject, body, createdOn, contactPurposeTypeCode: purpose, participants }),
+        body: JSON.stringify({ step: 1, subject, body: contactBody, createdOn, contactPurposeTypeCode: purpose, participants }),
       });
       const d1 = await r1.json();
       if (!r1.ok) throw new Error(d1.error ?? "Step 1 failed");
       const contactLogId = d1.contactLogId;
 
+      // Step 2: register the original email file as the attachment
       setUploadStep(2);
       const r2 = await fetch("/api/contact-log", {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify({
           step: 2, contactLogId,
-          name: `${subject}.txt`,
-          mimeType: "text/plain",
-          fileSize: bodyBytes.length,
+          name: emailFile.name,
+          mimeType: emailFile.type || "application/octet-stream",
+          fileSize: emailFile.size,
           type: "FILE",
         }),
       });
@@ -370,11 +375,15 @@ export default function ContactLogPage() {
       if (!r2.ok) throw new Error(d2.error ?? "Step 2 failed");
       const attachmentId = d2.attachmentId;
 
+      // Step 3: upload raw file bytes via multipart
       setUploadStep(3);
+      const form = new FormData();
+      form.append("attachmentId", String(attachmentId));
+      form.append("file", emailFile);
       const r3 = await fetch("/api/contact-log", {
         method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ step: 3, attachmentId, content: body }),
+        headers: { Authorization: `Bearer ${token}` },
+        body: form,
       });
       const d3 = await r3.json();
       if (!r3.ok) throw new Error(d3.error ?? "Step 3 failed");
@@ -547,16 +556,18 @@ export default function ContactLogPage() {
                       {formatDate(parsedEmail.date)}
                     </div>
                   </div>
-                  <div style={{ padding: "10px 16px 12px" }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: "var(--navy)", marginBottom: 6 }}>
-                      {parsedEmail.subject || <span style={{ color: "var(--muted)", fontStyle: "italic" }}>No subject</span>}
-                    </div>
-                    <div style={{
-                      fontSize: 12, color: "var(--slate)", lineHeight: 1.5,
-                      maxHeight: 72, overflow: "hidden",
-                      display: "-webkit-box", WebkitLineClamp: 4, WebkitBoxOrient: "vertical",
-                    }}>
-                      {parsedEmail.body.slice(0, 400) || <span style={{ color: "var(--muted)", fontStyle: "italic" }}>No body</span>}
+                  <div style={{ padding: "10px 16px 12px", display: "flex", alignItems: "center", gap: 12 }}>
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--gold)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                      <polyline points="14 2 14 8 20 8" />
+                    </svg>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: "var(--navy)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {emailFile?.name ?? parsedEmail.subject}
+                      </div>
+                      <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+                        {emailFile ? `${(emailFile.size / 1024).toFixed(1)} KB · ${emailFile.type || "application/octet-stream"}` : parsedEmail.subject}
+                      </div>
                     </div>
                   </div>
                   <div style={{ padding: "8px 16px", borderTop: "1px solid #f3d5b5" }}>
@@ -612,6 +623,25 @@ export default function ContactLogPage() {
                   {parseError && (
                     <div style={{ marginTop: 8, fontSize: 12, color: "#dc2626" }}>{parseError}</div>
                   )}
+                </div>
+              )}
+            </div>
+
+            {/* Note */}
+            <div style={fieldBlock}>
+              <label style={labelStyle}>
+                Note <span style={{ fontWeight: 400, textTransform: "none", letterSpacing: 0, color: "var(--muted)" }}>(optional)</span>
+              </label>
+              <textarea
+                value={note}
+                onChange={e => setNote(e.target.value)}
+                rows={2}
+                placeholder="Add context or additional notes…"
+                style={{ ...inputStyle, resize: "vertical", minHeight: 60 }}
+              />
+              {parsedEmail && (
+                <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 5, lineHeight: 1.4 }}>
+                  Auto-description: <em style={{ color: "var(--slate)" }}>Email from {parsedEmail.from || parsedEmail.fromEmail}: {parsedEmail.subject}</em>
                 </div>
               )}
             </div>
@@ -728,7 +758,7 @@ export default function ContactLogPage() {
 
             {!canSubmit && uploadStep === 0 && (
               <div style={{ fontSize: 11, color: "var(--muted)", textAlign: "center", marginTop: 8 }}>
-                {!parsedEmail ? "Drop an email file above" : !purpose ? "Select a purpose" : "Subject and body are required"}
+                {!emailFile ? "Drop an email file above" : !purpose ? "Select a purpose" : "Subject is required"}
               </div>
             )}
 

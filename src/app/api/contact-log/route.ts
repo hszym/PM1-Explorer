@@ -50,22 +50,51 @@ export async function GET(req: NextRequest) {
 /**
  * POST /api/contact-log
  *
- * step 1 → POST /outlook/contactLogs
- *   body: { step:1, subject, body, createdOn, contactPurposeTypeCode, participants }
- *   returns: { contactLogId }
+ * Steps 1 & 2 — JSON body:
+ *   step 1 → POST /outlook/contactLogs
+ *   step 2 → POST /outlook/contactLogs/{contactLogId}/attachments
  *
- * step 2 → POST /outlook/contactLogs/{contactLogId}/attachments
- *   body: { step:2, contactLogId, name, mimeType, fileSize, type }
- *   returns: { attachmentId }
- *
- * step 3 → POST /outlook/attachments/{attachmentId}  (octet-stream)
- *   body: { step:3, attachmentId, content: string }
- *   returns: { success: true }
+ * Step 3 — multipart/form-data  { attachmentId, file }
+ *   → POST /outlook/attachments/{attachmentId}  (raw file bytes as octet-stream)
  */
 export async function POST(req: NextRequest) {
   const token = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
   if (!token) return NextResponse.json({ error: "No token" }, { status: 401 });
 
+  const contentType = req.headers.get("content-type") ?? "";
+
+  // ── Step 3: raw file upload via FormData ──────────────────────────────────
+  if (contentType.includes("multipart/form-data")) {
+    try {
+      const form = await req.formData();
+      const attachmentId = form.get("attachmentId") as string | null;
+      const file = form.get("file") as File | null;
+      if (!attachmentId || !file) {
+        return NextResponse.json({ error: "attachmentId and file required" }, { status: 400 });
+      }
+      const bytes = await file.arrayBuffer();
+      const res = await fetch(`${getBase()}/outlook/attachments/${attachmentId}`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": file.type || "application/octet-stream",
+        },
+        body: bytes,
+        cache: "no-store",
+        signal: signal(30000),
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(`Step 3 failed ${res.status}: ${text}`);
+      }
+      return NextResponse.json({ success: true });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Step 3 failed";
+      return NextResponse.json({ error: message }, { status: 500 });
+    }
+  }
+
+  // ── Steps 1 & 2: JSON ─────────────────────────────────────────────────────
   let body: Record<string, unknown>;
   try {
     body = await req.json();
@@ -76,7 +105,6 @@ export async function POST(req: NextRequest) {
   const { step } = body;
 
   try {
-    // ── Step 1: create contact log ────────────────────────────────────────────
     if (step === 1) {
       const { subject, body: logBody, createdOn, contactPurposeTypeCode, participants } = body;
       const res = await fetch(`${getBase()}/outlook/contactLogs`, {
@@ -93,13 +121,11 @@ export async function POST(req: NextRequest) {
       const text = await res.text();
       let data: unknown;
       try { data = JSON.parse(text); } catch { data = { raw: text }; }
-      // PM1 may return the ID directly, as data.id, or as the body
       const d = data as Record<string, unknown>;
       const contactLogId = d?.id ?? d?.contactLogId ?? data;
       return NextResponse.json({ contactLogId });
     }
 
-    // ── Step 2: register attachment metadata ─────────────────────────────────
     if (step === 2) {
       const { contactLogId, name, mimeType, fileSize, type } = body;
       const res = await fetch(`${getBase()}/outlook/contactLogs/${contactLogId}/attachments`, {
@@ -121,31 +147,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ attachmentId });
     }
 
-    // ── Step 3: upload binary content ─────────────────────────────────────────
-    if (step === 3) {
-      const { attachmentId, content } = body;
-      if (typeof content !== "string") {
-        return NextResponse.json({ error: "content must be a string" }, { status: 400 });
-      }
-      const bytes = Buffer.from(content as string, "utf-8");
-      const res = await fetch(`${getBase()}/outlook/attachments/${attachmentId}`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/octet-stream",
-        },
-        body: bytes,
-        cache: "no-store",
-        signal: signal(15000),
-      });
-      if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        throw new Error(`Step 3 failed ${res.status}: ${text}`);
-      }
-      return NextResponse.json({ success: true });
-    }
-
-    return NextResponse.json({ error: "Invalid step (must be 1, 2, or 3)" }, { status: 400 });
+    return NextResponse.json({ error: "Invalid step (must be 1 or 2 for JSON; use multipart for step 3)" }, { status: 400 });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Request failed";
     return NextResponse.json({ error: message }, { status: 500 });
