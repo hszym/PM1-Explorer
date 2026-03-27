@@ -757,12 +757,22 @@ export default function ContactLogPage() {
                 marginBottom: 16, padding: "14px 16px", background: "#f0fdf4",
                 borderRadius: "var(--radius)", border: "1px solid #bbf7d0",
               }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: "#16a34a", marginBottom: 4 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "#16a34a", marginBottom: 6 }}>
                   ✓ Contact log saved successfully
                 </div>
-                <div style={{ fontSize: 12, color: "#15803d" }}>
-                  PM1 Contact Log ID:{" "}
-                  <span style={{ fontFamily: "monospace", fontWeight: 700 }}>{String(result.contactLogId)}</span>
+                {subject && (
+                  <div style={{ fontSize: 12, color: "#15803d", marginBottom: 2 }}>
+                    <span style={{ fontWeight: 600 }}>Subject:</span> {subject}
+                  </div>
+                )}
+                {selectedPerson && (
+                  <div style={{ fontSize: 12, color: "#15803d", marginBottom: 2 }}>
+                    <span style={{ fontWeight: 600 }}>Client:</span> {selectedPerson.name}
+                    {selectedPerson.code && <span style={{ fontFamily: "monospace", marginLeft: 6, opacity: 0.7 }}>{selectedPerson.code}</span>}
+                  </div>
+                )}
+                <div style={{ fontSize: 11, color: "#86efac", marginTop: 4, fontFamily: "monospace" }}>
+                  ID {String(result.contactLogId)}
                 </div>
               </div>
             )}
