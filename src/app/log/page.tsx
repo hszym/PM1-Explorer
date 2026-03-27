@@ -298,7 +298,7 @@ export default function ContactLogPage() {
               return r.ok ? r.json() : p;
             })
           );
-          setSearchResults(mapPersons(details));
+          setSearchResults(mapPersons(details).sort((a, b) => a.name.localeCompare(b.name)));
           return;
         }
       }
@@ -307,7 +307,11 @@ export default function ContactLogPage() {
       const r2 = await fetch(`${base}/persons?searchText=${encodeURIComponent(q.trim())}&maxResults=10`, { headers: auth });
       const d2 = await r2.json();
       const arr2: unknown[] = r2.ok && Array.isArray(d2) ? d2 : [];
-      setSearchResults(mapPersons(arr2));
+      const lower = q.trim().toLowerCase();
+      const mapped = mapPersons(arr2)
+        .filter(p => p.name.toLowerCase().includes(lower))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      setSearchResults(mapped);
     } catch {
       setSearchResults([]);
     } finally {
