@@ -1,7 +1,10 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  experimental: {
-    serverComponentsExternalPackages: ["msgreader"],
+  webpack: (config, { isServer }) => {
+    if (isServer) {
+      config.externals.push("msgreader");
+    }
+    return config;
   },
 };
 module.exports = nextConfig;
