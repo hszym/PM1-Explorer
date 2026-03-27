@@ -9,7 +9,7 @@ function getBase(): string {
   return base;
 }
 
-function signal(ms = 8000) {
+function signal(ms = 30000) {
   return AbortSignal.timeout(ms);
 }
 
