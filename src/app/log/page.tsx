@@ -155,33 +155,18 @@ function parseEml(text: string): ParsedEmail {
   return { from, fromEmail, subject, body: body.trim(), date };
 }
 
-async function parseMsg(buffer: ArrayBuffer): Promise<ParsedEmail> {
-  const { default: MsgReader } = await import("msgreader");
-  const reader = new MsgReader(buffer);
-  const info = reader.getFileData();
-
-  const subject = (info.subject as string) ?? "";
-  const senderName = (info.senderName as string) ?? "";
-  const senderEmail = (info.senderEmail as string) ?? "";
-  const body = (info.body as string) ?? "";
-  const headers = (info.headers as string) ?? "";
-
-  // Try to parse date from headers
-  let date = todayISO();
-  const dateM = headers.match(/^Date:\s*(.+)$/im);
-  if (dateM) {
-    try {
-      const d = new Date(dateM[1].trim());
-      if (!isNaN(d.getTime())) date = d.toISOString().slice(0, 10);
-    } catch {}
-  }
-
+async function parseMsg(file: File): Promise<ParsedEmail> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch("/api/parse-email", { method: "POST", body: form });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? "Failed to parse .msg file");
   return {
-    from: senderName || senderEmail,
-    fromEmail: senderEmail,
-    subject,
-    body: body.trim(),
-    date,
+    from: data.from ?? data.fromEmail ?? "",
+    fromEmail: data.fromEmail ?? "",
+    subject: data.subject ?? "",
+    body: data.body ?? "",
+    date: data.date ?? todayISO(),
   };
 }
 
@@ -306,8 +291,7 @@ export default function ContactLogPage() {
     try {
       let parsed: ParsedEmail;
       if (name.endsWith(".msg")) {
-        const buf = await file.arrayBuffer();
-        parsed = await parseMsg(buf);
+        parsed = await parseMsg(file);
       } else {
         const text = await file.text();
         parsed = parseEml(text);
