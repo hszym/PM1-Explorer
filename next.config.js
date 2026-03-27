@@ -1,5 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  serverExternalPackages: ["msgreader"],
+  experimental: {
+    serverComponentsExternalPackages: ["msgreader"],
+  },
 };
 module.exports = nextConfig;
