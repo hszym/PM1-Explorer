@@ -254,9 +254,15 @@ export default function ContactLogPage() {
   const mapPersons = useCallback((arr: unknown[]) =>
     arr.map((p: unknown) => {
       const person = p as Record<string, unknown>;
-      const firstName = (person.firstName as string) ?? "";
-      const lastName = (person.lastName as string) ?? "";
-      const name = (person.name as string) ||
+      console.log("[PM1 person]", person);
+      const firstName = (person.firstName as string) ?? (person.prenom as string) ?? "";
+      const lastName = (person.lastName as string) ?? (person.nom as string) ?? "";
+      const name =
+        (person.name as string) ||
+        (person.fullName as string) ||
+        (person.displayName as string) ||
+        (person.label as string) ||
+        (person.shortName as string) ||
         [firstName, lastName].filter(Boolean).join(" ") ||
         `ID ${person.id}`;
       return {
