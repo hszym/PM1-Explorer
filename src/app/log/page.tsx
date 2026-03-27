@@ -390,7 +390,9 @@ export default function ContactLogPage() {
     const autoDescription = `Email from ${parsedEmail.from || parsedEmail.fromEmail}: ${parsedEmail.subject}`;
     const contactBody = note.trim() ? `${note.trim()}\n\n${autoDescription}` : autoDescription;
     const createdOn = new Date(date || todayISO()).toISOString();
-    const participants = [{ email: parsedEmail.fromEmail || "" }];
+    const participants = selectedPerson
+      ? [{ id: selectedPerson.id, email: parsedEmail.fromEmail || "" }]
+      : parsedEmail.fromEmail ? [{ email: parsedEmail.fromEmail }] : [];
     const base = pm1Base();
     const auth = { Authorization: `Bearer ${token}` };
 
