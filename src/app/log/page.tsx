@@ -19,6 +19,10 @@ function todayISO() {
   return new Date().toISOString().slice(0, 10);
 }
 
+function pm1Base() {
+  return process.env.NEXT_PUBLIC_PM1_API_BASE ?? "";
+}
+
 // ── session ───────────────────────────────────────────────────────────────────
 
 function getSession(): { token: string; userName: string } | null {
@@ -267,10 +271,11 @@ export default function ContactLogPage() {
     if (!q.trim() || !token) { setSearchResults([]); return; }
     setSearching(true);
     try {
-      // Stage 1: email lookup via /outlook/persons
-      const r1 = await fetch(`/api/contact-log?email=${encodeURIComponent(q.trim())}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const base = pm1Base();
+      const auth = { Authorization: `Bearer ${token}` };
+
+      // Stage 1: email lookup — /outlook/persons?email=
+      const r1 = await fetch(`${base}/outlook/persons?email=${encodeURIComponent(q.trim())}`, { headers: auth });
       const d1 = await r1.json();
       const arr1: unknown[] = r1.ok && Array.isArray(d1) ? d1 : [];
 
@@ -279,10 +284,8 @@ export default function ContactLogPage() {
         return;
       }
 
-      // Stage 2: text search via /persons?searchText=
-      const r2 = await fetch(`/api/contact-log?text=${encodeURIComponent(q.trim())}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      // Stage 2: text search — /persons?searchText=&maxResults=10
+      const r2 = await fetch(`${base}/persons?searchText=${encodeURIComponent(q.trim())}&maxResults=10`, { headers: auth });
       const d2 = await r2.json();
       const arr2: unknown[] = r2.ok && Array.isArray(d2) ? d2 : [];
       setSearchResults(mapPersons(arr2));
@@ -365,48 +368,47 @@ export default function ContactLogPage() {
     const contactBody = note.trim() ? `${note.trim()}\n\n${autoDescription}` : autoDescription;
     const createdOn = date || todayISO();
     const participants = [{ email: parsedEmail.fromEmail || "" }];
+    const base = pm1Base();
+    const auth = { Authorization: `Bearer ${token}` };
+
+    const pm1Json = async (res: Response, label: string) => {
+      const text = await res.text();
+      if (!res.ok) throw new Error(`${label} failed ${res.status}: ${text}`);
+      try { return JSON.parse(text); } catch { return text; }
+    };
 
     try {
       // Step 1: create contact log
       setUploadStep(1);
-      const r1 = await fetch("/api/contact-log", {
+      const d1 = await pm1Json(await fetch(`${base}/outlook/contactLogs`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ step: 1, subject, body: contactBody, createdOn, contactPurposeTypeCode: purpose, participants }),
-      });
-      const d1 = await r1.json();
-      if (!r1.ok) throw new Error(d1.error ?? "Step 1 failed");
-      const contactLogId = d1.contactLogId;
+        headers: { ...auth, "Content-Type": "application/json" },
+        body: JSON.stringify({ subject, body: contactBody, createdOn, contactPurposeTypeCode: purpose, participants }),
+      }), "Step 1");
+      const contactLogId = (d1 as Record<string, unknown>)?.id ?? (d1 as Record<string, unknown>)?.contactLogId ?? d1;
 
-      // Step 2: register the original email file as the attachment
+      // Step 2: register attachment metadata
       setUploadStep(2);
-      const r2 = await fetch("/api/contact-log", {
+      const d2 = await pm1Json(await fetch(`${base}/outlook/contactLogs/${contactLogId}/attachments`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        headers: { ...auth, "Content-Type": "application/json" },
         body: JSON.stringify({
-          step: 2, contactLogId,
           name: emailFile.name,
           mimeType: emailFile.type || "application/octet-stream",
           fileSize: emailFile.size,
           type: "FILE",
         }),
-      });
-      const d2 = await r2.json();
-      if (!r2.ok) throw new Error(d2.error ?? "Step 2 failed");
-      const attachmentId = d2.attachmentId;
+      }), "Step 2");
+      const attachmentId = (d2 as Record<string, unknown>)?.id ?? (d2 as Record<string, unknown>)?.attachmentId ?? d2;
 
-      // Step 3: upload raw file bytes via multipart
+      // Step 3: upload raw file bytes directly to PM1
       setUploadStep(3);
-      const form = new FormData();
-      form.append("attachmentId", String(attachmentId));
-      form.append("file", emailFile);
-      const r3 = await fetch("/api/contact-log", {
+      const fileBytes = await emailFile.arrayBuffer();
+      await pm1Json(await fetch(`${base}/outlook/attachments/${attachmentId}`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-        body: form,
-      });
-      const d3 = await r3.json();
-      if (!r3.ok) throw new Error(d3.error ?? "Step 3 failed");
+        headers: { ...auth, "Content-Type": emailFile.type || "application/octet-stream" },
+        body: fileBytes,
+      }), "Step 3");
 
       setResult({ contactLogId });
       setUploadStep(0);
