@@ -222,9 +222,9 @@ export default function ContactLogPage() {
 
   // Client search
   const [query, setQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<{ id: number; name: string; code?: string }[]>([]);
+  const [searchResults, setSearchResults] = useState<{ id: number; name: string; code?: string; personType?: string }[]>([]);
   const [searching, setSearching] = useState(false);
-  const [selectedPerson, setSelectedPerson] = useState<{ id: number; name: string; code?: string } | null>(null);
+  const [selectedPerson, setSelectedPerson] = useState<{ id: number; name: string; code?: string; personType?: string } | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Email drop zone
@@ -247,31 +247,51 @@ export default function ContactLogPage() {
 
   // ── person search ──────────────────────────────────────────────────────────
 
+  const mapPersons = useCallback((arr: unknown[]) =>
+    arr.map((p: unknown) => {
+      const person = p as Record<string, unknown>;
+      const firstName = (person.firstName as string) ?? "";
+      const lastName = (person.lastName as string) ?? "";
+      const name = (person.name as string) ||
+        [firstName, lastName].filter(Boolean).join(" ") ||
+        `ID ${person.id}`;
+      return {
+        id: person.id as number,
+        name,
+        code: (person.code as string) ?? undefined,
+        personType: (person.type as string) ?? (person.personType as string) ?? undefined,
+      };
+    }), []);
+
   const runSearch = useCallback(async (q: string) => {
     if (!q.trim() || !token) { setSearchResults([]); return; }
     setSearching(true);
     try {
-      const res = await fetch(`/api/contact-log?email=${encodeURIComponent(q.trim())}`, {
+      // Stage 1: email lookup via /outlook/persons
+      const r1 = await fetch(`/api/contact-log?email=${encodeURIComponent(q.trim())}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Search failed");
-      const arr: unknown[] = Array.isArray(data) ? data : [];
-      setSearchResults(arr.map((p: unknown) => {
-        const person = p as Record<string, unknown>;
-        const firstName = (person.firstName as string) ?? "";
-        const lastName = (person.lastName as string) ?? "";
-        const name = (person.name as string) ||
-          [firstName, lastName].filter(Boolean).join(" ") ||
-          `ID ${person.id}`;
-        return { id: person.id as number, name, code: person.code as string | undefined };
-      }));
+      const d1 = await r1.json();
+      const arr1: unknown[] = r1.ok && Array.isArray(d1) ? d1 : [];
+
+      if (arr1.length > 0) {
+        setSearchResults(mapPersons(arr1));
+        return;
+      }
+
+      // Stage 2: text search via /persons?searchText=
+      const r2 = await fetch(`/api/contact-log?text=${encodeURIComponent(q.trim())}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const d2 = await r2.json();
+      const arr2: unknown[] = r2.ok && Array.isArray(d2) ? d2 : [];
+      setSearchResults(mapPersons(arr2));
     } catch {
       setSearchResults([]);
     } finally {
       setSearching(false);
     }
-  }, [token]);
+  }, [token, mapPersons]);
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -444,7 +464,7 @@ export default function ContactLogPage() {
           <div style={cardHeader}>
             <div style={{ fontSize: 15, fontWeight: 700, color: "var(--navy)", fontFamily: "var(--font-serif)" }}>Client</div>
             <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
-              Search by email to link a contact
+              Search by name or email to link a contact
             </div>
           </div>
           <div style={cardBody}>
@@ -484,7 +504,7 @@ export default function ContactLogPage() {
                   <input
                     value={query}
                     onChange={e => setQuery(e.target.value)}
-                    placeholder="Search by email…"
+                    placeholder="Search by name or email…"
                     style={{ ...inputStyle, paddingLeft: 32 }}
                   />
                   {searching && (
@@ -506,13 +526,26 @@ export default function ContactLogPage() {
                         onMouseLeave={e => (e.currentTarget.style.background = "var(--white)")}
                       >
                         <span style={{ fontWeight: 500, color: "var(--navy)" }}>{p.name}</span>
-                        {p.code && <span style={{ fontSize: 11, color: "var(--muted)", fontFamily: "monospace" }}>{p.code}</span>}
+                        <span style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                          {p.personType && (
+                            <span style={{
+                              fontSize: 10, fontWeight: 600, padding: "2px 6px", borderRadius: 10,
+                              background: p.personType === "NATURAL_PERSON" ? "#f0f9ff" : "#f5f3ff",
+                              color: p.personType === "NATURAL_PERSON" ? "#0369a1" : "#6d28d9",
+                              border: `1px solid ${p.personType === "NATURAL_PERSON" ? "#bae6fd" : "#ddd6fe"}`,
+                              textTransform: "uppercase", letterSpacing: "0.03em",
+                            }}>
+                              {p.personType === "NATURAL_PERSON" ? "Person" : p.personType === "LEGAL_ENTITY" ? "Entity" : p.personType}
+                            </span>
+                          )}
+                          {p.code && <span style={{ fontSize: 11, color: "var(--muted)", fontFamily: "monospace" }}>{p.code}</span>}
+                        </span>
                       </div>
                     ))}
                   </div>
                 )}
                 {!searching && query.trim() && searchResults.length === 0 && (
-                  <div style={{ fontSize: 12, color: "var(--muted)", padding: "6px 2px" }}>No contacts found for this email.</div>
+                  <div style={{ fontSize: 12, color: "var(--muted)", padding: "6px 2px" }}>No results — try a different name or email.</div>
                 )}
               </div>
             )}

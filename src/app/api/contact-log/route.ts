@@ -19,25 +19,40 @@ function bearerHeaders(token: string, contentType?: string) {
   return h;
 }
 
-/** GET /api/contact-log?email=... → PM1 GET /outlook/persons?email=... */
+/**
+ * GET /api/contact-log?email={q}  → PM1 GET /outlook/persons?email={q}
+ * GET /api/contact-log?text={q}   → PM1 GET /persons?searchText={q}&maxResults=10
+ */
 export async function GET(req: NextRequest) {
   const token = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
   if (!token) return NextResponse.json({ error: "No token" }, { status: 401 });
 
   const email = req.nextUrl.searchParams.get("email");
-  if (!email) return NextResponse.json({ error: "email param required" }, { status: 400 });
+  const text = req.nextUrl.searchParams.get("text");
+
+  if (!email && !text) {
+    return NextResponse.json({ error: "email or text param required" }, { status: 400 });
+  }
 
   try {
-    const url = new URL(`${getBase()}/outlook/persons`);
-    url.searchParams.set("email", email);
-    const res = await fetch(url.toString(), {
+    let pm1Url: URL;
+    if (email) {
+      pm1Url = new URL(`${getBase()}/outlook/persons`);
+      pm1Url.searchParams.set("email", email);
+    } else {
+      pm1Url = new URL(`${getBase()}/persons`);
+      pm1Url.searchParams.set("searchText", text!);
+      pm1Url.searchParams.set("maxResults", "10");
+    }
+
+    const res = await fetch(pm1Url.toString(), {
       headers: bearerHeaders(token),
       cache: "no-store",
       signal: signal(),
     });
     if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new Error(`Person search failed ${res.status}: ${text}`);
+      const txt = await res.text().catch(() => "");
+      throw new Error(`Person search failed ${res.status}: ${txt}`);
     }
     const data = await res.json();
     return NextResponse.json(data);
