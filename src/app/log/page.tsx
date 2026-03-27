@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 
 // ── constants ─────────────────────────────────────────────────────────────────
 
@@ -19,7 +19,7 @@ function todayISO() {
   return new Date().toISOString().slice(0, 10);
 }
 
-// ── helpers ───────────────────────────────────────────────────────────────────
+// ── session ───────────────────────────────────────────────────────────────────
 
 function getSession(): { token: string; userName: string } | null {
   if (typeof window === "undefined") return null;
@@ -29,10 +29,174 @@ function getSession(): { token: string; userName: string } | null {
   } catch { return null; }
 }
 
+// ── email parsing helpers ─────────────────────────────────────────────────────
+
+interface ParsedEmail {
+  from: string;
+  fromEmail: string;
+  subject: string;
+  body: string;
+  date: string; // YYYY-MM-DD
+}
+
+function escapeRegex(s: string) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function decodeRfc2047(str: string): string {
+  return str.replace(/=\?([^?]+)\?([BQbq])\?([^?]*)\?=/g, (_, charset: string, enc: string, text: string) => {
+    try {
+      let bytes: Uint8Array;
+      if (enc.toUpperCase() === "B") {
+        const bin = atob(text);
+        bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      } else {
+        const raw = text.replace(/_/g, " ").replace(/=([0-9A-Fa-f]{2})/g, (_, h) =>
+          String.fromCharCode(parseInt(h, 16))
+        );
+        bytes = new Uint8Array(raw.length);
+        for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+      }
+      return new TextDecoder(charset).decode(bytes);
+    } catch { return text; }
+  });
+}
+
+function decodeQP(str: string): string {
+  return str
+    .replace(/=\r?\n/g, "")
+    .replace(/=([0-9A-Fa-f]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
+}
+
+function stripHtml(html: string): string {
+  return html
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n").replace(/<\/div>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ").replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"')
+    .replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function extractMultipartText(text: string, boundary: string): string {
+  const parts = text.split(new RegExp("--" + escapeRegex(boundary) + "(?:--)?"));
+  // prefer plain text
+  for (const part of parts) {
+    const sep = part.indexOf("\n\n");
+    if (sep < 0) continue;
+    const ph = part.slice(0, sep).toLowerCase();
+    const pb = part.slice(sep + 2);
+    if (ph.includes("text/plain")) {
+      const encM = ph.match(/content-transfer-encoding:\s*(\S+)/);
+      return encM?.[1]?.trim() === "quoted-printable" ? decodeQP(pb) : pb;
+    }
+  }
+  // fallback: html → strip
+  for (const part of parts) {
+    const sep = part.indexOf("\n\n");
+    if (sep < 0) continue;
+    const ph = part.slice(0, sep).toLowerCase();
+    const pb = part.slice(sep + 2);
+    if (ph.includes("text/html")) return stripHtml(pb);
+  }
+  return "";
+}
+
+function parseEml(text: string): ParsedEmail {
+  const norm = text.replace(/\r\n/g, "\n");
+  const blank = norm.indexOf("\n\n");
+  const headerSrc = blank >= 0 ? norm.slice(0, blank) : norm;
+  const bodySrc = blank >= 0 ? norm.slice(blank + 2) : "";
+
+  // unfold continuation lines
+  const unfolded = headerSrc.replace(/\n[ \t]+/g, " ");
+  const hmap: Record<string, string> = {};
+  for (const line of unfolded.split("\n")) {
+    const c = line.indexOf(":");
+    if (c > 0) {
+      const k = line.slice(0, c).toLowerCase().trim();
+      const v = line.slice(c + 1).trim();
+      if (!hmap[k]) hmap[k] = v;
+    }
+  }
+
+  const fromRaw = hmap["from"] ?? "";
+  const emailM = fromRaw.match(/<([^>]+)>/);
+  const fromEmail = emailM ? emailM[1].trim() : fromRaw.replace(/['"<>]/g, "").trim();
+  const nameM = fromRaw.match(/^"?([^"<\n]+?)"?\s*</);
+  const from = nameM ? decodeRfc2047(nameM[1].trim()) : fromEmail;
+
+  const subject = decodeRfc2047(hmap["subject"] ?? "");
+
+  let date = todayISO();
+  const dateRaw = hmap["date"];
+  if (dateRaw) {
+    try {
+      const d = new Date(dateRaw);
+      if (!isNaN(d.getTime())) date = d.toISOString().slice(0, 10);
+    } catch {}
+  }
+
+  const ct = hmap["content-type"] ?? "";
+  let body = "";
+  if (ct.toLowerCase().includes("multipart")) {
+    const bM = ct.match(/boundary="?([^";\s\r\n]+)"?/i);
+    if (bM) body = extractMultipartText(norm, bM[1]);
+    if (!body) body = stripHtml(bodySrc);
+  } else {
+    const enc = (hmap["content-transfer-encoding"] ?? "").toLowerCase().trim();
+    body = enc === "quoted-printable" ? decodeQP(bodySrc) : bodySrc;
+    if (ct.toLowerCase().includes("text/html")) body = stripHtml(body);
+  }
+
+  return { from, fromEmail, subject, body: body.trim(), date };
+}
+
+async function parseMsg(buffer: ArrayBuffer): Promise<ParsedEmail> {
+  const { default: MsgReader } = await import("msgreader");
+  const reader = new MsgReader(buffer);
+  const info = reader.getFileData();
+
+  const subject = (info.subject as string) ?? "";
+  const senderName = (info.senderName as string) ?? "";
+  const senderEmail = (info.senderEmail as string) ?? "";
+  const body = (info.body as string) ?? "";
+  const headers = (info.headers as string) ?? "";
+
+  // Try to parse date from headers
+  let date = todayISO();
+  const dateM = headers.match(/^Date:\s*(.+)$/im);
+  if (dateM) {
+    try {
+      const d = new Date(dateM[1].trim());
+      if (!isNaN(d.getTime())) date = d.toISOString().slice(0, 10);
+    } catch {}
+  }
+
+  return {
+    from: senderName || senderEmail,
+    fromEmail: senderEmail,
+    subject,
+    body: body.trim(),
+    date,
+  };
+}
+
+// ── display helpers ───────────────────────────────────────────────────────────
+
 function initials(name: string): string {
   const parts = name.trim().split(/\s+/);
   if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
   return name.slice(0, 2).toUpperCase();
+}
+
+function formatDate(iso: string): string {
+  try {
+    return new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+  } catch { return iso; }
 }
 
 // ── shared styles ─────────────────────────────────────────────────────────────
@@ -78,18 +242,24 @@ export default function ContactLogPage() {
   const [selectedPerson, setSelectedPerson] = useState<{ id: number; name: string; code?: string } | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Form
+  // Email drop zone
+  const [parsedEmail, setParsedEmail] = useState<ParsedEmail | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+  const [parseError, setParseError] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Form fields derived/overridable
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
   const [purpose, setPurpose] = useState("");
   const [date, setDate] = useState(todayISO());
 
   // Upload state
-  const [uploadStep, setUploadStep] = useState(0); // 0 = idle, 1/2/3 = in progress
+  const [uploadStep, setUploadStep] = useState(0);
   const [result, setResult] = useState<{ contactLogId: unknown } | null>(null);
   const [error, setError] = useState("");
 
-  // ── person search (debounced 400ms) ────────────────────────────────────────
+  // ── person search ──────────────────────────────────────────────────────────
 
   const runSearch = useCallback(async (q: string) => {
     if (!q.trim() || !token) { setSearchResults([]); return; }
@@ -124,6 +294,58 @@ export default function ContactLogPage() {
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
   }, [query, runSearch]);
 
+  // ── email file processing ──────────────────────────────────────────────────
+
+  const processFile = useCallback(async (file: File) => {
+    setParseError("");
+    const name = file.name.toLowerCase();
+    if (!name.endsWith(".msg") && !name.endsWith(".eml")) {
+      setParseError("Only .msg and .eml files are supported.");
+      return;
+    }
+    try {
+      let parsed: ParsedEmail;
+      if (name.endsWith(".msg")) {
+        const buf = await file.arrayBuffer();
+        parsed = await parseMsg(buf);
+      } else {
+        const text = await file.text();
+        parsed = parseEml(text);
+      }
+      setParsedEmail(parsed);
+      setSubject(parsed.subject);
+      setBody(parsed.body);
+      setDate(parsed.date);
+      // auto-trigger person search with sender email
+      if (parsed.fromEmail) {
+        setQuery(parsed.fromEmail);
+        setSelectedPerson(null);
+        setSearchResults([]);
+        runSearch(parsed.fromEmail);
+      }
+    } catch (err) {
+      setParseError(err instanceof Error ? err.message : "Failed to parse email file.");
+    }
+  }, [runSearch]);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    const file = e.dataTransfer.files[0];
+    if (file) processFile(file);
+  }, [processFile]);
+
+  const resetEmail = () => {
+    setParsedEmail(null);
+    setSubject("");
+    setBody("");
+    setDate(todayISO());
+    setQuery("");
+    setSearchResults([]);
+    setSelectedPerson(null);
+    setParseError("");
+  };
+
   // ── upload ─────────────────────────────────────────────────────────────────
 
   const canSubmit = subject.trim() && body.trim() && purpose;
@@ -138,7 +360,6 @@ export default function ContactLogPage() {
     const participants = [{ email: "" }];
 
     try {
-      // Step 1: create contact log
       setUploadStep(1);
       const r1 = await fetch("/api/contact-log", {
         method: "POST",
@@ -146,10 +367,9 @@ export default function ContactLogPage() {
         body: JSON.stringify({ step: 1, subject, body, createdOn, contactPurposeTypeCode: purpose, participants }),
       });
       const d1 = await r1.json();
-      if (!r1.ok) throw new Error(d1.error ?? `Step 1 failed`);
+      if (!r1.ok) throw new Error(d1.error ?? "Step 1 failed");
       const contactLogId = d1.contactLogId;
 
-      // Step 2: register attachment metadata
       setUploadStep(2);
       const r2 = await fetch("/api/contact-log", {
         method: "POST",
@@ -163,10 +383,9 @@ export default function ContactLogPage() {
         }),
       });
       const d2 = await r2.json();
-      if (!r2.ok) throw new Error(d2.error ?? `Step 2 failed`);
+      if (!r2.ok) throw new Error(d2.error ?? "Step 2 failed");
       const attachmentId = d2.attachmentId;
 
-      // Step 3: upload raw content
       setUploadStep(3);
       const r3 = await fetch("/api/contact-log", {
         method: "POST",
@@ -174,7 +393,7 @@ export default function ContactLogPage() {
         body: JSON.stringify({ step: 3, attachmentId, content: body }),
       });
       const d3 = await r3.json();
-      if (!r3.ok) throw new Error(d3.error ?? `Step 3 failed`);
+      if (!r3.ok) throw new Error(d3.error ?? "Step 3 failed");
 
       setResult({ contactLogId });
       setUploadStep(0);
@@ -205,8 +424,7 @@ export default function ContactLogPage() {
       {/* Top bar */}
       <div style={{
         height: 56, background: "var(--navy)", display: "flex", alignItems: "center",
-        padding: "0 24px", gap: 16, borderBottom: "1px solid rgba(255,255,255,0.05)",
-        flexShrink: 0,
+        padding: "0 24px", gap: 16, borderBottom: "1px solid rgba(255,255,255,0.05)", flexShrink: 0,
       }}>
         <a href="/" style={{ textDecoration: "none", display: "flex", alignItems: "center", gap: 10 }}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#64748b" strokeWidth="2">
@@ -231,16 +449,13 @@ export default function ContactLogPage() {
         {/* ── Section 1: Client search ── */}
         <div style={cardStyle}>
           <div style={cardHeader}>
-            <div style={{ fontSize: 15, fontWeight: 700, color: "var(--navy)", fontFamily: "var(--font-serif)" }}>
-              Client
-            </div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: "var(--navy)", fontFamily: "var(--font-serif)" }}>Client</div>
             <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
               Search by email to link a contact
             </div>
           </div>
           <div style={cardBody}>
             {selectedPerson ? (
-              /* Selected person card */
               <div style={{
                 display: "flex", alignItems: "center", gap: 14,
                 padding: "12px 16px", borderRadius: "var(--radius)",
@@ -251,25 +466,19 @@ export default function ContactLogPage() {
                   background: "var(--navy)", color: "var(--white)",
                   display: "flex", alignItems: "center", justifyContent: "center",
                   fontSize: 14, fontWeight: 700, flexShrink: 0,
-                  fontFamily: "var(--font-sans)",
                 }}>
                   {initials(selectedPerson.name)}
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 14, fontWeight: 600, color: "var(--navy)" }}>{selectedPerson.name}</div>
                   {selectedPerson.code && (
-                    <div style={{ fontSize: 11, color: "var(--muted)", fontFamily: "monospace", marginTop: 2 }}>
-                      {selectedPerson.code}
-                    </div>
+                    <div style={{ fontSize: 11, color: "var(--muted)", fontFamily: "monospace", marginTop: 2 }}>{selectedPerson.code}</div>
                   )}
                 </div>
                 <button
                   onClick={() => { setSelectedPerson(null); setQuery(""); setSearchResults([]); }}
                   style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)", fontSize: 18, lineHeight: 1, padding: "2px 4px" }}
-                  aria-label="Remove"
-                >
-                  ×
-                </button>
+                >×</button>
               </div>
             ) : (
               <div>
@@ -286,12 +495,9 @@ export default function ContactLogPage() {
                     style={{ ...inputStyle, paddingLeft: 32 }}
                   />
                   {searching && (
-                    <div style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", fontSize: 11, color: "var(--muted)" }}>
-                      …
-                    </div>
+                    <div style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", fontSize: 11, color: "var(--muted)" }}>…</div>
                   )}
                 </div>
-
                 {searchResults.length > 0 && (
                   <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", overflow: "hidden" }}>
                     {searchResults.map((p, i) => (
@@ -302,20 +508,16 @@ export default function ContactLogPage() {
                           padding: "10px 14px", cursor: "pointer", fontSize: 13,
                           background: "var(--white)", borderBottom: i < searchResults.length - 1 ? "1px solid var(--light-border)" : "none",
                           display: "flex", justifyContent: "space-between", alignItems: "center",
-                          transition: "background 0.1s",
                         }}
                         onMouseEnter={e => (e.currentTarget.style.background = "var(--bg)")}
                         onMouseLeave={e => (e.currentTarget.style.background = "var(--white)")}
                       >
                         <span style={{ fontWeight: 500, color: "var(--navy)" }}>{p.name}</span>
-                        {p.code && (
-                          <span style={{ fontSize: 11, color: "var(--muted)", fontFamily: "monospace" }}>{p.code}</span>
-                        )}
+                        {p.code && <span style={{ fontSize: 11, color: "var(--muted)", fontFamily: "monospace" }}>{p.code}</span>}
                       </div>
                     ))}
                   </div>
                 )}
-
                 {!searching && query.trim() && searchResults.length === 0 && (
                   <div style={{ fontSize: 12, color: "var(--muted)", padding: "6px 2px" }}>No contacts found for this email.</div>
                 )}
@@ -324,39 +526,110 @@ export default function ContactLogPage() {
           </div>
         </div>
 
-        {/* ── Section 2: Contact log form ── */}
+        {/* ── Section 2: Email + Form ── */}
         <div style={cardStyle}>
           <div style={cardHeader}>
-            <div style={{ fontSize: 15, fontWeight: 700, color: "var(--navy)", fontFamily: "var(--font-serif)" }}>
-              Contact Log
-            </div>
-            <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
-              Record will be stored in PM1
-            </div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: "var(--navy)", fontFamily: "var(--font-serif)" }}>Contact Log</div>
+            <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>Record will be stored in PM1</div>
           </div>
           <div style={cardBody}>
 
-            {/* Subject */}
+            {/* ── Email drop zone or preview ── */}
             <div style={fieldBlock}>
-              <label style={labelStyle}>Subject</label>
-              <input
-                value={subject}
-                onChange={e => setSubject(e.target.value)}
-                placeholder="e.g. Q1 Portfolio Review"
-                style={inputStyle}
-              />
-            </div>
-
-            {/* Body */}
-            <div style={fieldBlock}>
-              <label style={labelStyle}>Notes</label>
-              <textarea
-                value={body}
-                onChange={e => setBody(e.target.value)}
-                rows={6}
-                placeholder="Summary of the contact…"
-                style={{ ...inputStyle, resize: "vertical", minHeight: 120 }}
-              />
+              {parsedEmail ? (
+                /* Parsed email preview card */
+                <div style={{
+                  borderRadius: "var(--radius)", border: "1px solid #f3d5b5",
+                  background: "#fffaf7", overflow: "hidden",
+                }}>
+                  <div style={{ padding: "12px 16px", borderBottom: "1px solid #f3d5b5", display: "flex", alignItems: "center", gap: 12 }}>
+                    <div style={{
+                      width: 36, height: 36, borderRadius: "50%", flexShrink: 0,
+                      background: "var(--navy)", color: "var(--white)",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      fontSize: 13, fontWeight: 700,
+                    }}>
+                      {initials(parsedEmail.from || "?")}
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: "var(--navy)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {parsedEmail.from}
+                      </div>
+                      <div style={{ fontSize: 11, color: "var(--muted)", fontFamily: "monospace", marginTop: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {parsedEmail.fromEmail}
+                      </div>
+                    </div>
+                    <div style={{ fontSize: 11, color: "var(--muted)", whiteSpace: "nowrap", flexShrink: 0 }}>
+                      {formatDate(parsedEmail.date)}
+                    </div>
+                  </div>
+                  <div style={{ padding: "10px 16px 12px" }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: "var(--navy)", marginBottom: 6 }}>
+                      {parsedEmail.subject || <span style={{ color: "var(--muted)", fontStyle: "italic" }}>No subject</span>}
+                    </div>
+                    <div style={{
+                      fontSize: 12, color: "var(--slate)", lineHeight: 1.5,
+                      maxHeight: 72, overflow: "hidden",
+                      display: "-webkit-box", WebkitLineClamp: 4, WebkitBoxOrient: "vertical",
+                    }}>
+                      {parsedEmail.body.slice(0, 400) || <span style={{ color: "var(--muted)", fontStyle: "italic" }}>No body</span>}
+                    </div>
+                  </div>
+                  <div style={{ padding: "8px 16px", borderTop: "1px solid #f3d5b5" }}>
+                    <button
+                      onClick={resetEmail}
+                      style={{ fontSize: 11, color: "var(--muted)", background: "none", border: "none", cursor: "pointer", textDecoration: "underline", padding: 0, fontFamily: "var(--font-sans)" }}
+                    >
+                      Drop a different file
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                /* Drop zone */
+                <div>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".msg,.eml"
+                    style={{ display: "none" }}
+                    onChange={e => { const f = e.target.files?.[0]; if (f) processFile(f); e.target.value = ""; }}
+                  />
+                  <div
+                    onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+                    onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOver(false); }}
+                    onDrop={handleDrop}
+                    onClick={() => fileInputRef.current?.click()}
+                    style={{
+                      border: `2px dashed ${dragOver ? "#b07840" : "var(--gold)"}`,
+                      borderRadius: "var(--radius-lg)",
+                      padding: "40px 24px",
+                      textAlign: "center",
+                      cursor: "pointer",
+                      background: dragOver ? "#fff3e8" : "#fffaf7",
+                      transition: "all 0.15s",
+                    }}
+                  >
+                    <svg
+                      width="28" height="28" viewBox="0 0 24 24" fill="none"
+                      stroke="var(--gold)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"
+                      style={{ marginBottom: 12 }}
+                    >
+                      <rect x="2" y="4" width="20" height="16" rx="2" />
+                      <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7" />
+                    </svg>
+                    <div style={{ fontSize: 14, fontWeight: 600, color: "var(--navy)", marginBottom: 4 }}>
+                      Drop your email here
+                    </div>
+                    <div style={{ fontSize: 12, color: "var(--muted)" }}>
+                      .msg or .eml · or{" "}
+                      <span style={{ color: "var(--gold)", fontWeight: 500 }}>browse</span>
+                    </div>
+                  </div>
+                  {parseError && (
+                    <div style={{ marginTop: 8, fontSize: 12, color: "#dc2626" }}>{parseError}</div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Purpose */}
@@ -386,7 +659,7 @@ export default function ContactLogPage() {
             </div>
 
             {/* Date */}
-            <div style={fieldBlock}>
+            <div style={{ ...fieldBlock, marginBottom: 0 }}>
               <label style={labelStyle}>Date</label>
               <input
                 type="date"
@@ -403,7 +676,6 @@ export default function ContactLogPage() {
         <div style={cardStyle}>
           <div style={cardBody}>
 
-            {/* Step indicator */}
             {uploadStep > 0 && (
               <div style={{ marginBottom: 20 }}>
                 <div style={{ fontSize: 12, color: "var(--slate)", marginBottom: 10, fontWeight: 500 }}>
@@ -431,7 +703,6 @@ export default function ContactLogPage() {
               </div>
             )}
 
-            {/* Success */}
             {result && (
               <div style={{
                 marginBottom: 16, padding: "14px 16px", background: "#f0fdf4",
@@ -442,19 +713,15 @@ export default function ContactLogPage() {
                 </div>
                 <div style={{ fontSize: 12, color: "#15803d" }}>
                   PM1 Contact Log ID:{" "}
-                  <span style={{ fontFamily: "monospace", fontWeight: 700 }}>
-                    {String(result.contactLogId)}
-                  </span>
+                  <span style={{ fontFamily: "monospace", fontWeight: 700 }}>{String(result.contactLogId)}</span>
                 </div>
               </div>
             )}
 
-            {/* Error */}
             {error && (
               <div style={{
                 marginBottom: 16, padding: "10px 14px", background: "#fef2f2",
-                borderRadius: "var(--radius)", fontSize: 13, color: "#dc2626",
-                border: "1px solid #fecaca",
+                borderRadius: "var(--radius)", fontSize: 13, color: "#dc2626", border: "1px solid #fecaca",
               }}>
                 {error}
               </div>
@@ -477,7 +744,7 @@ export default function ContactLogPage() {
 
             {!canSubmit && uploadStep === 0 && (
               <div style={{ fontSize: 11, color: "var(--muted)", textAlign: "center", marginTop: 8 }}>
-                Subject, notes, and purpose are required
+                {!parsedEmail ? "Drop an email file above" : !purpose ? "Select a purpose" : "Subject and body are required"}
               </div>
             )}
 
