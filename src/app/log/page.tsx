@@ -254,7 +254,6 @@ export default function ContactLogPage() {
   const mapPersons = useCallback((arr: unknown[]) =>
     arr.map((p: unknown) => {
       const person = p as Record<string, unknown>;
-      console.log("[PM1 person]", person);
       const firstName = (person.firstName as string) ?? (person.prenom as string) ?? "";
       const lastName = (person.lastName as string) ?? (person.nom as string) ?? "";
       const name =
@@ -280,13 +279,21 @@ export default function ContactLogPage() {
       const base = pm1Base();
       const auth = { Authorization: `Bearer ${token}` };
 
-      // Stage 1: email lookup — /outlook/persons?email=
+      // Stage 1: email lookup — /outlook/persons?email= (returns bare {id} objects)
       const r1 = await fetch(`${base}/outlook/persons?email=${encodeURIComponent(q.trim())}`, { headers: auth });
       const d1 = await r1.json();
       const arr1: unknown[] = r1.ok && Array.isArray(d1) ? d1 : [];
 
       if (arr1.length > 0) {
-        setSearchResults(mapPersons(arr1));
+        // Enrich bare IDs with full person details
+        const details = await Promise.all(
+          arr1.map(async (p) => {
+            const id = (p as Record<string, unknown>).id;
+            const r = await fetch(`${base}/persons/${id}`, { headers: auth });
+            return r.ok ? r.json() : p;
+          })
+        );
+        setSearchResults(mapPersons(details));
         return;
       }
 
