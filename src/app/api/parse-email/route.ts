@@ -3,7 +3,8 @@
 // .eml files are parsed client-side with plain JS.
 
 import { NextRequest, NextResponse } from "next/server";
-import MsgReader from "msgreader";
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const MsgReader = require("../../../lib/msgreader").default as new (buf: ArrayBuffer) => { getFileData(): Record<string, unknown> };
 
 function todayISO() {
   return new Date().toISOString().slice(0, 10);
