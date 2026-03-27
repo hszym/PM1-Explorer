@@ -416,9 +416,9 @@ export default function ContactLogPage() {
       }), "Step 1");
       const contactLogId = (d1 as Record<string, unknown>)?.id ?? (d1 as Record<string, unknown>)?.contactLogId ?? d1;
 
-      // Step 2: register attachment metadata
+      // Step 2: register attachment metadata (outlook attachment flow)
       setUploadStep(2);
-      const d2 = await pm1Json(await fetch(`${base}/contactLogs/${contactLogId}/attachments`, {
+      const d2 = await pm1Json(await fetch(`${base}/outlook/contactLogs/${contactLogId}/attachments`, {
         method: "POST",
         headers: { ...auth, "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -430,10 +430,10 @@ export default function ContactLogPage() {
       }), "Step 2");
       const attachmentId = (d2 as Record<string, unknown>)?.id ?? (d2 as Record<string, unknown>)?.attachmentId ?? d2;
 
-      // Step 3: upload raw file bytes directly to PM1
+      // Step 3: upload raw file bytes
       setUploadStep(3);
       const fileBytes = await emailFile.arrayBuffer();
-      await pm1Json(await fetch(`${base}/attachments/${attachmentId}`, {
+      await pm1Json(await fetch(`${base}/outlook/attachments/${attachmentId}`, {
         method: "POST",
         headers: { ...auth, "Content-Type": emailFile.type || "application/octet-stream" },
         body: fileBytes,
