@@ -221,7 +221,9 @@ const cardBody: React.CSSProperties = { padding: 24 };
 // ── main page ─────────────────────────────────────────────────────────────────
 
 export default function ContactLogPage() {
-  const session = getSession();
+  const [session, setSession] = useState<{ token: string; userName: string } | null>(null);
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setSession(getSession()); setMounted(true); }, []);
   const token = session?.token ?? "";
 
   // Client search
@@ -279,25 +281,29 @@ export default function ContactLogPage() {
       const base = pm1Base();
       const auth = { Authorization: `Bearer ${token}` };
 
-      // Stage 1: email lookup — /outlook/persons?email= (returns bare {id} objects)
-      const r1 = await fetch(`${base}/outlook/persons?email=${encodeURIComponent(q.trim())}`, { headers: auth });
-      const d1 = await r1.json();
-      const arr1: unknown[] = r1.ok && Array.isArray(d1) ? d1 : [];
+      const isEmail = q.trim().includes("@");
 
-      if (arr1.length > 0) {
-        // Enrich bare IDs with full person details
-        const details = await Promise.all(
-          arr1.map(async (p) => {
-            const id = (p as Record<string, unknown>).id;
-            const r = await fetch(`${base}/persons/${id}`, { headers: auth });
-            return r.ok ? r.json() : p;
-          })
-        );
-        setSearchResults(mapPersons(details));
-        return;
+      if (isEmail) {
+        // Email lookup — /outlook/persons?email= (returns bare {id} objects)
+        const r1 = await fetch(`${base}/outlook/persons?email=${encodeURIComponent(q.trim())}`, { headers: auth });
+        const d1 = await r1.json();
+        const arr1: unknown[] = r1.ok && Array.isArray(d1) ? d1 : [];
+
+        if (arr1.length > 0) {
+          // Enrich bare IDs with full person details
+          const details = await Promise.all(
+            arr1.map(async (p) => {
+              const id = (p as Record<string, unknown>).id;
+              const r = await fetch(`${base}/persons/${id}`, { headers: auth });
+              return r.ok ? r.json() : p;
+            })
+          );
+          setSearchResults(mapPersons(details));
+          return;
+        }
       }
 
-      // Stage 2: text search — /persons?searchText=&maxResults=10
+      // Text search — /persons?searchText=&maxResults=10
       const r2 = await fetch(`${base}/persons?searchText=${encodeURIComponent(q.trim())}&maxResults=10`, { headers: auth });
       const d2 = await r2.json();
       const arr2: unknown[] = r2.ok && Array.isArray(d2) ? d2 : [];
@@ -431,7 +437,9 @@ export default function ContactLogPage() {
     }
   };
 
-  // ── not authenticated ──────────────────────────────────────────────────────
+  // ── not authenticated / not mounted ───────────────────────────────────────
+
+  if (!mounted) return null;
 
   if (!token) {
     return (
