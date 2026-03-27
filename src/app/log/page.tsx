@@ -267,7 +267,7 @@ export default function ContactLogPage() {
         [firstName, lastName].filter(Boolean).join(" ") ||
         `ID ${person.id}`;
       return {
-        id: person.id as number,
+        id: Number(person.id),
         name,
         code: (person.code as string) ?? undefined,
         personType: (person.type as string) ?? (person.personType as string) ?? undefined,
@@ -390,8 +390,7 @@ export default function ContactLogPage() {
     const autoDescription = `Email from ${parsedEmail.from || parsedEmail.fromEmail}: ${parsedEmail.subject}`;
     const detail = note.trim() ? `${note.trim()}\n\n${autoDescription}` : autoDescription;
     const contactDate = new Date(date || todayISO()).toISOString();
-    const participants = selectedPerson ? [{ personId: selectedPerson.id, initiator: false }] : [];
-    const relatedPersons = selectedPerson ? [selectedPerson.id] : [];
+    const relatedPersons = selectedPerson ? [Number(selectedPerson.id)] : [];
     const base = pm1Base();
     const auth = { Authorization: `Bearer ${token}` };
 
@@ -412,7 +411,6 @@ export default function ContactLogPage() {
           objective: subject,
           detail,
           purposeNote: PURPOSES[purpose] ?? purpose,
-          participants,
           relatedPersons,
         }),
       }), "Step 1");
