@@ -388,11 +388,10 @@ export default function ContactLogPage() {
     setResult(null);
 
     const autoDescription = `Email from ${parsedEmail.from || parsedEmail.fromEmail}: ${parsedEmail.subject}`;
-    const contactBody = note.trim() ? `${note.trim()}\n\n${autoDescription}` : autoDescription;
-    const createdOn = new Date(date || todayISO()).toISOString();
-    const participants = selectedPerson
-      ? [{ personId: selectedPerson.id }]
-      : [];
+    const detail = note.trim() ? `${note.trim()}\n\n${autoDescription}` : autoDescription;
+    const contactDate = new Date(date || todayISO()).toISOString();
+    const participants = selectedPerson ? [{ personId: selectedPerson.id, initiator: false }] : [];
+    const relatedPersons = selectedPerson ? [selectedPerson.id] : [];
     const base = pm1Base();
     const auth = { Authorization: `Bearer ${token}` };
 
@@ -405,16 +404,23 @@ export default function ContactLogPage() {
     try {
       // Step 1: create contact log
       setUploadStep(1);
-      const d1 = await pm1Json(await fetch(`${base}/outlook/contactLogs`, {
+      const d1 = await pm1Json(await fetch(`${base}/contactLogs`, {
         method: "POST",
         headers: { ...auth, "Content-Type": "application/json" },
-        body: JSON.stringify({ subject, body: contactBody, createdOn, contactPurposeTypeCode: purpose, participants }),
+        body: JSON.stringify({
+          contactDate,
+          objective: subject,
+          detail,
+          purposeNote: PURPOSES[purpose] ?? purpose,
+          participants,
+          relatedPersons,
+        }),
       }), "Step 1");
       const contactLogId = (d1 as Record<string, unknown>)?.id ?? (d1 as Record<string, unknown>)?.contactLogId ?? d1;
 
       // Step 2: register attachment metadata
       setUploadStep(2);
-      const d2 = await pm1Json(await fetch(`${base}/outlook/contactLogs/${contactLogId}/attachments`, {
+      const d2 = await pm1Json(await fetch(`${base}/contactLogs/${contactLogId}/attachments`, {
         method: "POST",
         headers: { ...auth, "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -429,7 +435,7 @@ export default function ContactLogPage() {
       // Step 3: upload raw file bytes directly to PM1
       setUploadStep(3);
       const fileBytes = await emailFile.arrayBuffer();
-      await pm1Json(await fetch(`${base}/outlook/attachments/${attachmentId}`, {
+      await pm1Json(await fetch(`${base}/attachments/${attachmentId}`, {
         method: "POST",
         headers: { ...auth, "Content-Type": emailFile.type || "application/octet-stream" },
         body: fileBytes,
